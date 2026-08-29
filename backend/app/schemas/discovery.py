@@ -12,6 +12,15 @@ class DiscoverySearchRequest(BaseModel):
     notify_each: bool = True
 
 
+class AgentRunRequest(BaseModel):
+    industries: list[str] = Field(min_length=1, max_length=20)
+    cities: list[str] = Field(min_length=1, max_length=20)
+    country: str = Field(default="Argentina", min_length=2, max_length=120)
+    leads_per_search: int = Field(default=10, ge=1, le=30)
+    minimum_score: int = Field(default=50, ge=0, le=100)
+    notify_each: bool = True
+
+
 class DiscoveredLead(BaseModel):
     company: str
     industry: str
@@ -35,3 +44,12 @@ class DiscoverySearchResponse(BaseModel):
     qualified: int
     skipped_duplicates: int
     leads: list[DiscoveredLead]
+
+
+class AgentRunResponse(BaseModel):
+    searches: int
+    discovered: int
+    analyzed: int
+    qualified: int
+    skipped_duplicates: int
+    results: list[DiscoverySearchResponse]
