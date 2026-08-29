@@ -6,8 +6,9 @@ from app.core.config import settings
 from app.schemas.lead import LeadAnalysis
 
 SYSTEM_PROMPT = """You are a B2B sales analyst for a software development agency.
-Analyze the public website content of a potential client and identify realistic software opportunities.
-Do not invent facts that are not supported by the supplied website text.
+Analyze only the public facts supplied about a potential client and identify realistic software opportunities.
+Do not invent facts, technologies, missing features, or business problems that are not supported by the supplied data.
+If the company has no known website, you may treat the absence of a website in the supplied discovery data as a digital-presence opportunity, but do not claim the company definitively has no website outside that data source.
 Return ONLY valid JSON matching this exact schema:
 {
   "score": 0,
@@ -18,7 +19,7 @@ Return ONLY valid JSON matching this exact schema:
   "outreach_message": "string"
 }
 The score must be an integer from 0 to 100 and should measure how strong the lead is for custom software, web development, ecommerce, booking systems, dashboards, automation, integrations, or redesign work.
-The outreach message must be short, personalized, professional, and avoid exaggerated claims.
+The outreach message must be short, personalized, professional, and avoid exaggerated or unverified claims.
 """
 
 
@@ -74,6 +75,17 @@ def _extract_json(raw: str) -> dict:
         return json.loads(cleaned[start : end + 1])
 
 
+async def _analyze_prompt(user_prompt: str) -> LeadAnalysis:
+    raw = await chat_with_kimi(
+        [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_prompt},
+        ],
+        max_tokens=1800,
+    )
+    return LeadAnalysis.model_validate(_extract_json(raw))
+
+
 async def analyze_lead_with_kimi(
     company: str,
     website: str,
@@ -91,14 +103,30 @@ Public website text:
 
 Analyze this company as a potential lead for a software development agency.
 """
+    return await _analyze_prompt(user_prompt)
 
-    raw = await chat_with_kimi(
-        [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt},
-        ],
-        max_tokens=1800,
-    )
 
-    parsed = _extract_json(raw)
-    return LeadAnalysis.model_validate(parsed)
+async def analyze_listing_with_kimi(
+    *,
+    company: str,
+    industry: str,
+    city: str,
+    country: str,
+    website: str | None,
+    email: str | None,
+    phone: str | None,
+    source: str,
+) -> LeadAnalysis:
+    user_prompt = f"""Potential client discovered from a public business listing.
+Company: {company}
+Industry/search category: {industry}
+City: {city}
+Country: {country}
+Website found in listing: {website or 'Not provided by source'}
+Public email found: {email or 'Not provided'}
+Public phone found: {phone or 'Not provided'}
+Discovery source: {source}
+
+No readable website content is available for this analysis. Base the assessment only on these listing facts. If no website was provided by the source, frame website development as a possible opportunity rather than a certainty.
+"""
+    return await _analyze_prompt(user_prompt)
