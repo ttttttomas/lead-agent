@@ -1,10 +1,15 @@
+import asyncio
 import re
 
 import httpx
 
-USER_AGENT = "LeadAgent/0.3 (business discovery; contact: local-development)"
+USER_AGENT = "LeadAgent/0.4 (business discovery; contact: local-development)"
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
-OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+OVERPASS_URLS = [
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+    "https://overpass.nchc.org.tw/api/interpreter",
+]
 
 CATEGORY_FILTERS = {
     "hoteles": [('tourism', 'hotel'), ('tourism', 'hostel'), ('tourism', 'guest_house')],
@@ -96,7 +101,35 @@ def _build_overpass_query(filters: list[tuple[str, str]], bbox: tuple[float, flo
                 f'{element_type}["{key}"="{value}"]["name"]({south},{west},{north},{east});'
             )
 
-    return "[out:json][timeout:35];(" + "".join(parts) + ");out center tags;"
+    return "[out:json][timeout:25];(" + "".join(parts) + ");out center tags;"
+
+
+async def _query_overpass(query: str) -> dict:
+    headers = {"User-Agent": USER_AGENT}
+    errors: list[str] = []
+
+    async with httpx.AsyncClient(timeout=35.0, headers=headers) as client:
+        for url in OVERPASS_URLS:
+            for attempt in range(2):
+                try:
+                    response = await client.post(url, data={"data": query})
+                    if response.status_code in {429, 502, 503, 504}:
+                        raise httpx.HTTPStatusError(
+                            f"Overpass temporary error {response.status_code}",
+                            request=response.request,
+                            response=response,
+                        )
+                    response.raise_for_status()
+                    return response.json()
+                except (httpx.TimeoutException, httpx.HTTPStatusError, httpx.RequestError, ValueError) as exc:
+                    errors.append(f"{url} attempt {attempt + 1}: {exc}")
+                    if attempt == 0:
+                        await asyncio.sleep(1.5)
+
+    raise DiscoveryError(
+        "All Overpass providers failed temporarily. "
+        + " | ".join(errors[-6:])
+    )
 
 
 async def discover_businesses(industry: str, city: str, country: str, limit: int) -> list[dict]:
@@ -110,12 +143,7 @@ async def discover_businesses(industry: str, city: str, country: str, limit: int
 
     bbox = await _geocode_bbox(city, country)
     query = _build_overpass_query(filters, bbox)
-
-    headers = {"User-Agent": USER_AGENT}
-    async with httpx.AsyncClient(timeout=45.0, headers=headers) as client:
-        response = await client.post(OVERPASS_URL, data={"data": query})
-        response.raise_for_status()
-        payload = response.json()
+    payload = await _query_overpass(query)
 
     leads: list[dict] = []
     seen: set[str] = set()
