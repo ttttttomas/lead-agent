@@ -1,9 +1,10 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.routes.discovery import router as discovery_router
 from app.routes.leads import router as leads_router
 
-app = FastAPI(title="Lead Agent API", version="0.2.0")
+app = FastAPI(title="Lead Agent API", version="0.3.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -14,8 +15,9 @@ app.add_middleware(
 )
 
 app.include_router(leads_router)
+app.include_router(discovery_router)
 
 
 @app.get("/health")
 def health_check():
-    return {"status": "ok", "service": "lead-agent-api"}
+    return {"status": "ok", "service": "lead-agent-api", "version": "0.3.0"}
