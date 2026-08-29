@@ -20,6 +20,19 @@ from app.services.scraper import ScrapeError, scrape_website
 router = APIRouter(tags=["discovery"])
 
 
+async def _listing_analysis(business: dict):
+    return await analyze_listing_with_kimi(
+        company=business["company"],
+        industry=business["industry"],
+        city=business["city"],
+        country=business["country"],
+        website=business.get("website"),
+        email=business.get("email"),
+        phone=business.get("phone"),
+        source=business["source"],
+    )
+
+
 async def _process_search(payload: DiscoverySearchRequest) -> DiscoverySearchResponse:
     try:
         businesses = await discover_businesses(
@@ -55,25 +68,26 @@ async def _process_search(payload: DiscoverySearchRequest) -> DiscoverySearchRes
             skipped_duplicates += 1
             continue
 
-        analysis = None
-        website_for_analysis = business.get("website")
-
-        if website_for_analysis:
-            try:
-                scraped = await scrape_website(website_for_analysis)
-                analysis = await analyze_lead_with_kimi(
-                    company=business["company"],
-                    website=scraped["final_url"],
-                    page_title=scraped["title"],
-                    website_text=scraped["text"],
-                )
-                result.website = scraped["final_url"]
-            except (ScrapeError, httpx.HTTPError, ValueError, RuntimeError):
-                # If the website blocks scraping or is unreadable, still evaluate the
-                # public listing without inventing facts about the website.
-                analysis = await analyze_listing_with_kimi(**business)
-        else:
-            analysis = await analyze_listing_with_kimi(**business)
+        try:
+            website_for_analysis = business.get("website")
+            if website_for_analysis:
+                try:
+                    scraped = await scrape_website(website_for_analysis)
+                    analysis = await analyze_lead_with_kimi(
+                        company=business["company"],
+                        website=scraped["final_url"],
+                        page_title=scraped["title"],
+                        website_text=scraped["text"],
+                    )
+                    result.website = scraped["final_url"]
+                except ScrapeError:
+                    analysis = await _listing_analysis(business)
+            else:
+                analysis = await _listing_analysis(business)
+        except (httpx.HTTPError, ValueError, RuntimeError) as exc:
+            result.error = f"{result.error + ' | ' if result.error else ''}Analysis: {exc}"
+            results.append(result)
+            continue
 
         result.analysis = analysis
         analyzed += 1
