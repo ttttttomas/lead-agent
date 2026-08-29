@@ -17,12 +17,10 @@ def _get_engine():
     global _engine
     if _engine is None:
         engine_kwargs = {"pool_pre_ping": True}
-
         if settings.database_url.startswith("sqlite"):
             engine_kwargs["connect_args"] = {"check_same_thread": False}
         else:
             engine_kwargs["pool_recycle"] = 1800
-
         _engine = create_engine(settings.database_url, **engine_kwargs)
     return _engine
 
@@ -49,7 +47,6 @@ def init_database() -> None:
         )
         """
     )
-
     try:
         with _get_engine().begin() as connection:
             connection.execute(schema)
@@ -60,19 +57,83 @@ def init_database() -> None:
         raise LeadStoreError(f"Database initialization failed: {exc}") from exc
 
 
+def _row_to_lead(row) -> dict:
+    data = dict(row._mapping)
+    raw_analysis = data.get("analysis")
+    if raw_analysis:
+        try:
+            data["analysis"] = json.loads(raw_analysis) if isinstance(raw_analysis, str) else raw_analysis
+        except json.JSONDecodeError:
+            data["analysis"] = None
+    return data
+
+
+def list_leads(limit: int = 100, min_score: int | None = None, industry: str | None = None, city: str | None = None) -> list[dict]:
+    clauses = []
+    params: dict = {"limit": limit}
+    if min_score is not None:
+        clauses.append("score >= :min_score")
+        params["min_score"] = min_score
+    if industry:
+        clauses.append("LOWER(industry) LIKE LOWER(:industry)")
+        params["industry"] = f"%{industry}%"
+    if city:
+        clauses.append("LOWER(city) LIKE LOWER(:city)")
+        params["city"] = f"%{city}%"
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    query = text(f"SELECT * FROM leads {where} ORDER BY created_at DESC, id DESC LIMIT :limit")
+    try:
+        with _get_engine().connect() as connection:
+            return [_row_to_lead(row) for row in connection.execute(query, params).fetchall()]
+    except SQLAlchemyError as exc:
+        raise LeadStoreError(f"Database list failed: {exc}") from exc
+
+
+def get_lead(lead_id: int) -> dict | None:
+    try:
+        with _get_engine().connect() as connection:
+            row = connection.execute(text("SELECT * FROM leads WHERE id = :id LIMIT 1"), {"id": lead_id}).first()
+            return _row_to_lead(row) if row else None
+    except SQLAlchemyError as exc:
+        raise LeadStoreError(f"Database read failed: {exc}") from exc
+
+
+def get_lead_stats() -> dict:
+    query = text(
+        """
+        SELECT
+            COUNT(*) AS total,
+            SUM(CASE WHEN score >= 75 THEN 1 ELSE 0 END) AS high_priority,
+            SUM(CASE WHEN status = 'contacted' THEN 1 ELSE 0 END) AS contacted,
+            SUM(CASE WHEN status = 'replied' THEN 1 ELSE 0 END) AS replied,
+            COALESCE(AVG(score), 0) AS average_score
+        FROM leads
+        """
+    )
+    try:
+        with _get_engine().connect() as connection:
+            row = connection.execute(query).first()
+            return {
+                "total": int(row.total or 0),
+                "high_priority": int(row.high_priority or 0),
+                "contacted": int(row.contacted or 0),
+                "replied": int(row.replied or 0),
+                "average_score": round(float(row.average_score or 0), 1),
+            }
+    except SQLAlchemyError as exc:
+        raise LeadStoreError(f"Database stats failed: {exc}") from exc
+
+
 def lead_exists(company: str, city: str, website: str | None, email: str | None) -> bool:
     clauses = ["(LOWER(company_name) = LOWER(:company) AND LOWER(COALESCE(city, '')) = LOWER(:city))"]
     params = {"company": company, "city": city}
-
     if website:
         clauses.append("LOWER(COALESCE(website, '')) = LOWER(:website)")
         params["website"] = website
     if email:
         clauses.append("LOWER(COALESCE(contact_email, '')) = LOWER(:email)")
         params["email"] = email
-
     query = text(f"SELECT id FROM leads WHERE {' OR '.join(clauses)} LIMIT 1")
-
     try:
         with _get_engine().connect() as connection:
             return connection.execute(query, params).first() is not None
@@ -80,25 +141,9 @@ def lead_exists(company: str, city: str, website: str | None, email: str | None)
         raise LeadStoreError(f"Database duplicate check failed: {exc}") from exc
 
 
-def save_lead(
-    *,
-    company: str,
-    website: str | None,
-    industry: str,
-    city: str,
-    country: str,
-    email: str | None,
-    source: str,
-    source_url: str | None,
-    phone: str | None,
-    analysis: LeadAnalysis,
-) -> int:
+def save_lead(*, company: str, website: str | None, industry: str, city: str, country: str, email: str | None, source: str, source_url: str | None, phone: str | None, analysis: LeadAnalysis) -> int:
     analysis_payload = analysis.model_dump()
-    analysis_payload["discovery_metadata"] = {
-        "source_url": source_url,
-        "phone": phone,
-    }
-
+    analysis_payload["discovery_metadata"] = {"source_url": source_url, "phone": phone}
     statement = text(
         """
         INSERT INTO leads (
@@ -110,7 +155,6 @@ def save_lead(
         )
         """
     )
-
     params = {
         "company": company,
         "website": website,
@@ -124,7 +168,6 @@ def save_lead(
         "analysis": json.dumps(analysis_payload, ensure_ascii=False),
         "outreach": analysis.outreach_message,
     }
-
     try:
         with _get_engine().begin() as connection:
             result = connection.execute(statement, params)
