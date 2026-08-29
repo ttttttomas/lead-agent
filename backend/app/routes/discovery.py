@@ -33,13 +33,20 @@ async def _listing_analysis(business: dict):
     )
 
 
+def _candidate_limit(requested_leads: int) -> int:
+    """Fetch enough candidates so duplicates do not consume the requested limit."""
+    return min(max(requested_leads * 8, requested_leads + 20), 200)
+
+
 async def _process_search(payload: DiscoverySearchRequest) -> DiscoverySearchResponse:
+    candidate_limit = _candidate_limit(payload.limit)
+
     try:
         businesses = await discover_businesses(
             industry=payload.industry,
             city=payload.city,
             country=payload.country,
-            limit=payload.limit,
+            limit=candidate_limit,
         )
     except (DiscoveryError, httpx.HTTPError) as exc:
         raise HTTPException(status_code=502, detail=f"Discovery failed: {exc}") from exc
@@ -50,6 +57,10 @@ async def _process_search(payload: DiscoverySearchRequest) -> DiscoverySearchRes
     skipped_duplicates = 0
 
     for business in businesses:
+        # payload.limit now means NEW analyzed leads, not merely raw candidates.
+        if analyzed >= payload.limit:
+            break
+
         result = DiscoveredLead(**business)
 
         try:
