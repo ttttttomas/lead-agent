@@ -16,8 +16,48 @@ class LeadStoreError(RuntimeError):
 def _get_engine():
     global _engine
     if _engine is None:
-        _engine = create_engine(settings.database_url, pool_pre_ping=True, pool_recycle=1800)
+        engine_kwargs = {"pool_pre_ping": True}
+
+        if settings.database_url.startswith("sqlite"):
+            engine_kwargs["connect_args"] = {"check_same_thread": False}
+        else:
+            engine_kwargs["pool_recycle"] = 1800
+
+        _engine = create_engine(settings.database_url, **engine_kwargs)
     return _engine
+
+
+def init_database() -> None:
+    schema = text(
+        """
+        CREATE TABLE IF NOT EXISTS leads (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            company_name VARCHAR(255) NOT NULL,
+            website VARCHAR(500),
+            industry VARCHAR(150),
+            city VARCHAR(150),
+            country VARCHAR(150),
+            contact_email VARCHAR(255),
+            source VARCHAR(100),
+            score INTEGER,
+            opportunity VARCHAR(255),
+            analysis TEXT,
+            outreach_draft TEXT,
+            status VARCHAR(50) NOT NULL DEFAULT 'new',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+
+    try:
+        with _get_engine().begin() as connection:
+            connection.execute(schema)
+            connection.execute(text("CREATE INDEX IF NOT EXISTS idx_leads_status ON leads(status)"))
+            connection.execute(text("CREATE INDEX IF NOT EXISTS idx_leads_score ON leads(score)"))
+            connection.execute(text("CREATE INDEX IF NOT EXISTS idx_leads_industry ON leads(industry)"))
+    except SQLAlchemyError as exc:
+        raise LeadStoreError(f"Database initialization failed: {exc}") from exc
 
 
 def lead_exists(company: str, city: str, website: str | None, email: str | None) -> bool:
