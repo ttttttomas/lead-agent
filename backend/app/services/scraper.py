@@ -1,5 +1,6 @@
 import ipaddress
 import socket
+import unicodedata
 from urllib.parse import urlparse
 
 import httpx
@@ -14,9 +15,11 @@ MAX_TEXT_CHARS = 18000
 
 BROWSER_HEADERS = {
     "User-Agent": USER_AGENT,
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "es-AR,es;q=0.9,en;q=0.8",
-    "Accept-Encoding": "gzip, deflate, br",
+    # Avoid explicitly requesting Brotli here. Some legacy/proxied sites
+    # return incorrectly encoded bodies that look like HTML but are binary.
+    "Accept-Encoding": "gzip, deflate",
     "Cache-Control": "no-cache",
     "Pragma": "no-cache",
     "Upgrade-Insecure-Requests": "1",
@@ -50,17 +53,33 @@ def _is_public_host(hostname: str) -> bool:
     return True
 
 
+def _looks_readable(text: str) -> bool:
+    if len(text) < 80:
+        return False
+
+    sample = text[:5000]
+    bad = 0
+    for char in sample:
+        if char == "\ufffd" or char == "\x00":
+            bad += 1
+            continue
+        category = unicodedata.category(char)
+        if category.startswith("C") and char not in "\n\r\t":
+            bad += 1
+
+    return (bad / max(len(sample), 1)) < 0.02
+
+
 async def _fetch(client: httpx.AsyncClient, url: str) -> httpx.Response:
     response = await client.get(url)
 
-    # Some sites reject the first request unless it looks like a normal
-    # navigation that already has a same-origin Referer.
     if response.status_code in {403, 406, 429}:
         parsed = urlparse(url)
         origin = f"{parsed.scheme}://{parsed.netloc}/"
         retry_headers = {
             "Referer": origin,
             "Origin": f"{parsed.scheme}://{parsed.netloc}",
+            "Sec-Fetch-Site": "same-origin",
         }
         response = await client.get(url, headers=retry_headers)
 
@@ -97,12 +116,14 @@ async def scrape_website(url: str) -> dict:
         raise ScrapeError(f"Could not fetch website: {exc}") from exc
 
     content_type = response.headers.get("content-type", "").lower()
-    if "text/html" not in content_type:
-        raise ScrapeError("Website did not return HTML content")
+    if "text/html" not in content_type and "application/xhtml+xml" not in content_type:
+        raise ScrapeError(f"Website did not return HTML content ({content_type or 'unknown content type'})")
 
-    soup = BeautifulSoup(response.text, "html.parser")
+    # Parse raw bytes instead of response.text so BeautifulSoup can inspect
+    # meta charset declarations and encoding hints itself.
+    soup = BeautifulSoup(response.content, "html.parser")
 
-    for tag in soup(["script", "style", "noscript", "svg", "iframe"]):
+    for tag in soup(["script", "style", "noscript", "svg", "iframe", "template"]):
         tag.decompose()
 
     title = soup.title.get_text(" ", strip=True) if soup.title else None
@@ -111,6 +132,12 @@ async def scrape_website(url: str) -> dict:
 
     if not text:
         raise ScrapeError("Website returned no readable text")
+
+    if not _looks_readable(text):
+        raise ScrapeError(
+            "Website response was received, but its HTML could not be decoded into reliable readable text. "
+            "A browser-based scraper is required for this site."
+        )
 
     return {
         "final_url": str(response.url),
