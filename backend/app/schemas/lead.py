@@ -21,3 +21,4 @@ class LeadAnalyzeResponse(BaseModel):
     page_title: str | None = None
     analysis: LeadAnalysis
     notification_sent: bool = False
+    notification_error: str | None = None
