@@ -20,3 +20,4 @@ class LeadAnalyzeResponse(BaseModel):
     website: str
     page_title: str | None = None
     analysis: LeadAnalysis
+    notification_sent: bool = False
