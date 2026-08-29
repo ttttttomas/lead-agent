@@ -1,5 +1,4 @@
 import re
-from urllib.parse import quote
 
 import httpx
 
@@ -20,7 +19,6 @@ CATEGORY_FILTERS = {
     "constructora": [('craft', 'builder')],
     "peluquerias": [('shop', 'hairdresser')],
     "peluquería": [('shop', 'hairdresser')],
-    "peluquerias": [('shop', 'hairdresser')],
     "gimnasios": [('leisure', 'fitness_centre')],
     "gimnasio": [('leisure', 'fitness_centre')],
     "clinicas": [('amenity', 'clinic')],
@@ -115,7 +113,7 @@ async def discover_businesses(industry: str, city: str, country: str, limit: int
 
     headers = {"User-Agent": USER_AGENT}
     async with httpx.AsyncClient(timeout=45.0, headers=headers) as client:
-        response = await client.post(OVERPASS_URL, content=query)
+        response = await client.post(OVERPASS_URL, data={"data": query})
         response.raise_for_status()
         payload = response.json()
 
