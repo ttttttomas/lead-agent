@@ -1,3 +1,5 @@
+import smtplib
+
 import httpx
 from fastapi import APIRouter, HTTPException
 
