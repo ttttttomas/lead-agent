@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     nvidia_api_key: str = ""
     nvidia_base_url: str = "https://integrate.api.nvidia.com/v1"
     kimi_model: str = "moonshotai/kimi-k3"
-    database_url: str = "mysql+pymysql://user:password@localhost:3306/lead_agent"
+    database_url: str = "sqlite:///./lead_agent.db"
 
     smtp_host: str = "smtp.gmail.com"
     smtp_port: int = 587
@@ -18,9 +18,22 @@ class Settings(BaseSettings):
     smtp_password: str = ""
     notification_email: str = ""
 
+    # Automatic lead agent
+    agent_scheduler_enabled: bool = True
+    agent_schedule_hour: int = 9
+    agent_schedule_minute: int = 0
+    agent_timezone: str = "America/Argentina/Buenos_Aires"
+    agent_industries: str = "agencias de viajes,hoteles,inmobiliarias"
+    agent_cities: str = "Buenos Aires,Córdoba"
+    agent_country: str = "Argentina"
+    agent_leads_per_search: int = 3
+    agent_minimum_score: int = 50
+    agent_high_priority_score: int = 70
+
     model_config = SettingsConfigDict(
         env_file=ENV_FILE,
         env_file_encoding="utf-8",
+        extra="ignore",
     )
 
 
