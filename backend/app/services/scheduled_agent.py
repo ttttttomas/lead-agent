@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 from fastapi import HTTPException
@@ -14,6 +15,34 @@ def _csv(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+async def _run_one_search(industry: str, city: str, semaphore: asyncio.Semaphore) -> dict:
+    payload = DiscoverySearchRequest(
+        industry=industry,
+        city=city,
+        country=settings.agent_country,
+        limit=settings.agent_leads_per_search,
+        minimum_score=settings.agent_minimum_score,
+        notify_each=False,
+    )
+
+    async with semaphore:
+        try:
+            result = await _process_search(payload)
+            return {
+                "industry": industry,
+                "city": city,
+                "result": result,
+                "error": None,
+            }
+        except HTTPException as exc:
+            error = str(exc.detail)
+            logger.warning("Scheduled lead search failed: %s / %s: %s", industry, city, error)
+            return {"industry": industry, "city": city, "result": None, "error": error}
+        except Exception as exc:
+            logger.exception("Unexpected scheduled lead search failure: %s / %s", industry, city)
+            return {"industry": industry, "city": city, "result": None, "error": str(exc)}
+
+
 async def run_daily_agent() -> dict:
     industries = _csv(settings.agent_industries)
     cities = _csv(settings.agent_cities)
@@ -21,70 +50,68 @@ async def run_daily_agent() -> dict:
     if not industries or not cities:
         raise RuntimeError("AGENT_INDUSTRIES and AGENT_CITIES must contain at least one value")
 
+    combinations = [(industry, city) for city in cities for industry in industries]
+    semaphore = asyncio.Semaphore(max(1, settings.agent_max_concurrency))
+
+    # Searches run concurrently, but concurrency is capped so public providers,
+    # Kimi and the local SQLite DB are not flooded with requests.
+    outcomes = await asyncio.gather(
+        *(_run_one_search(industry, city, semaphore) for industry, city in combinations)
+    )
+
     all_leads: list[dict] = []
     errors: list[str] = []
-    searches = 0
     discovered = 0
     analyzed = 0
     qualified = 0
     skipped_duplicates = 0
 
-    for city in cities:
-        for industry in industries:
-            searches += 1
-            payload = DiscoverySearchRequest(
-                industry=industry,
-                city=city,
-                country=settings.agent_country,
-                limit=settings.agent_leads_per_search,
-                minimum_score=settings.agent_minimum_score,
-                notify_each=False,
+    for outcome in outcomes:
+        if outcome["error"]:
+            errors.append(f'{outcome["industry"]} / {outcome["city"]}: {outcome["error"]}')
+            continue
+
+        result = outcome["result"]
+        if result is None:
+            continue
+
+        discovered += result.discovered
+        analyzed += result.analyzed
+        qualified += result.qualified
+        skipped_duplicates += result.skipped_duplicates
+
+        for lead in result.leads:
+            if lead.analysis is None:
+                continue
+            all_leads.append(
+                {
+                    "company": lead.company,
+                    "industry": lead.industry,
+                    "city": lead.city,
+                    "country": lead.country,
+                    "website": lead.website,
+                    "email": lead.email,
+                    "phone": lead.phone,
+                    "source": lead.source,
+                    "source_url": lead.source_url,
+                    "analysis": lead.analysis,
+                }
             )
 
-            try:
-                result = await _process_search(payload)
-            except HTTPException as exc:
-                errors.append(f"{industry} / {city}: {exc.detail}")
-                logger.warning("Scheduled lead search failed: %s / %s: %s", industry, city, exc.detail)
-                continue
-            except Exception as exc:
-                errors.append(f"{industry} / {city}: {exc}")
-                logger.exception("Unexpected scheduled lead search failure")
-                continue
-
-            discovered += result.discovered
-            analyzed += result.analyzed
-            qualified += result.qualified
-            skipped_duplicates += result.skipped_duplicates
-
-            for lead in result.leads:
-                if lead.analysis is None:
-                    continue
-                all_leads.append(
-                    {
-                        "company": lead.company,
-                        "industry": lead.industry,
-                        "city": lead.city,
-                        "country": lead.country,
-                        "website": lead.website,
-                        "email": lead.email,
-                        "phone": lead.phone,
-                        "source": lead.source,
-                        "source_url": lead.source_url,
-                        "analysis": lead.analysis,
-                    }
-                )
-
+    # Always send one consolidated report, even when some discovery providers fail.
     await send_daily_lead_report(
         all_leads,
         high_priority_score=settings.agent_high_priority_score,
-        searches=searches,
+        searches=len(combinations),
         skipped_duplicates=skipped_duplicates,
+        errors=errors,
     )
 
     return {
         "status": "completed",
-        "searches": searches,
+        "searches": len(combinations),
+        "successful_searches": len(combinations) - len(errors),
+        "failed_searches": len(errors),
         "discovered": discovered,
         "analyzed": analyzed,
         "qualified": qualified,
