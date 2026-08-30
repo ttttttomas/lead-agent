@@ -16,6 +16,7 @@ from app.services.contact_enrichment import enrich_contact_data
 from app.services.discovery import DiscoveryError
 from app.services.email_notifier import send_lead_notification
 from app.services.kimi import analyze_lead_with_kimi, analyze_listing_with_kimi
+from app.services.lead_quality import calculate_contact_score, calculate_final_score, detect_large_chain
 from app.services.lead_store import LeadStoreError, lead_exists, save_lead
 from app.services.scraper import ScrapeError, scrape_website
 
@@ -56,10 +57,21 @@ async def _process_search(payload: DiscoverySearchRequest) -> DiscoverySearchRes
     analyzed = 0
     qualified = 0
     skipped_duplicates = 0
+    skipped_chains = 0
 
     for raw_business in businesses:
         if analyzed >= payload.limit:
             break
+
+        # Skip obvious multinational chains before enrichment/scraping/Kimi.
+        # This saves AI calls for local businesses where the decision-maker is
+        # more likely to control software and digital purchases.
+        is_chain, chain_reason = detect_large_chain(
+            raw_business["company"], raw_business.get("website")
+        )
+        if is_chain:
+            skipped_chains += 1
+            continue
 
         try:
             duplicate = await asyncio.to_thread(
@@ -77,17 +89,21 @@ async def _process_search(payload: DiscoverySearchRequest) -> DiscoverySearchRes
             continue
 
         # Overture can already provide websites/emails/phones/socials. The
-        # enrichment pass then inspects any website for additional direct
-        # channels such as WhatsApp, mailto links and contact pages.
+        # enrichment pass then inspects the website for WhatsApp, mailto links
+        # and contact pages.
         try:
             business = await enrich_contact_data(raw_business)
         except Exception:
             business = dict(raw_business)
             business["contactable"] = any(
                 business.get(k)
-                for k in ("email", "phone", "whatsapp", "instagram", "facebook", "linkedin", "website")
+                for k in ("email", "phone", "whatsapp", "instagram", "facebook", "linkedin")
             )
 
+        contact_score = calculate_contact_score(business)
+        business["contact_score"] = contact_score
+        business["chain_detected"] = False
+        business["chain_reason"] = None
         result = DiscoveredLead(**business)
 
         try:
@@ -112,6 +128,9 @@ async def _process_search(payload: DiscoverySearchRequest) -> DiscoverySearchRes
             continue
 
         result.analysis = analysis
+        result.opportunity_score = analysis.score
+        result.contact_score = contact_score
+        result.final_score = calculate_final_score(analysis.score, contact_score)
         analyzed += 1
 
         if analysis.score >= payload.minimum_score and result.contactable:
@@ -154,6 +173,7 @@ async def _process_search(payload: DiscoverySearchRequest) -> DiscoverySearchRes
         analyzed=analyzed,
         qualified=qualified,
         skipped_duplicates=skipped_duplicates,
+        skipped_chains=skipped_chains,
         leads=results,
     )
 
@@ -185,5 +205,6 @@ async def run_agent(payload: AgentRunRequest):
         analyzed=sum(item.analyzed for item in results),
         qualified=sum(item.qualified for item in results),
         skipped_duplicates=sum(item.skipped_duplicates for item in results),
+        skipped_chains=sum(item.skipped_chains for item in results),
         results=results,
     )
