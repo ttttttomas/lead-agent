@@ -29,6 +29,11 @@ class DiscoveredLead(BaseModel):
     website: str | None = None
     email: str | None = None
     phone: str | None = None
+    whatsapp: str | None = None
+    instagram: str | None = None
+    facebook: str | None = None
+    linkedin: str | None = None
+    contactable: bool = False
     source: str
     source_url: str | None = None
     analysis: LeadAnalysis | None = None
