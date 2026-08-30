@@ -77,7 +77,29 @@ def _list_html(items: list[str]) -> str:
     ) + "</ul>"
 
 
-def _build_daily_report_html(leads: list[dict], *, high_priority_score: int, searches: int, skipped_duplicates: int) -> str:
+def _errors_html(errors: list[str]) -> str:
+    if not errors:
+        return ""
+    items = "".join(
+        f'<li style="margin-bottom:6px">{_safe(item)}</li>' for item in errors
+    )
+    return f"""
+    <div style="margin-top:24px;padding:16px 18px;border:1px solid #fed7aa;background:#fff7ed;border-radius:8px">
+      <strong style="color:#9a3412">⚠️ Búsquedas no completadas ({len(errors)})</strong>
+      <p style="margin:8px 0;color:#9a3412;font-size:13px">El reporte se envió igualmente con todos los leads obtenidos correctamente.</p>
+      <ul style="margin:8px 0 0 18px;padding:0;color:#9a3412;font-size:12px;line-height:1.45">{items}</ul>
+    </div>
+    """
+
+
+def _build_daily_report_html(
+    leads: list[dict],
+    *,
+    high_priority_score: int,
+    searches: int,
+    skipped_duplicates: int,
+    errors: list[str],
+) -> str:
     now = datetime.now(ZoneInfo(settings.agent_timezone))
     scored = [lead for lead in leads if lead.get("analysis")]
     scores = [lead["analysis"].score for lead in scored]
@@ -134,6 +156,8 @@ def _build_daily_report_html(leads: list[dict], *, high_priority_score: int, sea
             """
         )
 
+    successful_searches = max(0, searches - len(errors))
+
     return f"""
     <!doctype html>
     <html>
@@ -162,7 +186,9 @@ def _build_daily_report_html(leads: list[dict], *, high_priority_score: int, sea
           <h2 style="margin-top:30px;font-size:17px;color:#1e293b;border-bottom:2px solid #e2e8f0;padding-bottom:10px">💡 Análisis de Oportunidades Clave</h2>
           {''.join(details) if details else '<p style="color:#64748b">No hubo nuevos leads para analizar.</p>'}
 
-          <p style="margin-top:26px;padding-top:16px;border-top:1px solid #e2e8f0;color:#94a3b8;font-size:12px">Búsquedas ejecutadas: {searches} · Duplicados omitidos: {skipped_duplicates} · Generado automáticamente por iWEB Marketing Agent.</p>
+          {_errors_html(errors)}
+
+          <p style="margin-top:26px;padding-top:16px;border-top:1px solid #e2e8f0;color:#94a3b8;font-size:12px">Búsquedas: {successful_searches}/{searches} completadas · Duplicados omitidos: {skipped_duplicates} · Generado automáticamente por iWEB Marketing Agent.</p>
         </div>
       </div>
     </body>
@@ -170,7 +196,7 @@ def _build_daily_report_html(leads: list[dict], *, high_priority_score: int, sea
     """
 
 
-def _build_daily_report_text(leads: list[dict], high_priority_score: int) -> str:
+def _build_daily_report_text(leads: list[dict], high_priority_score: int, errors: list[str]) -> str:
     scored = [lead for lead in leads if lead.get("analysis")]
     lines = ["iWEB Marketing Agent - Reporte diario", "", f"Leads procesados: {len(scored)}", ""]
     for lead in sorted(scored, key=lambda item: item["analysis"].score, reverse=True):
@@ -184,32 +210,49 @@ def _build_daily_report_text(leads: list[dict], high_priority_score: int) -> str
             f"Servicio sugerido: {analysis.recommended_service}",
             "",
         ])
+    if errors:
+        lines.extend(["Búsquedas no completadas:", *[f"- {item}" for item in errors]])
     return "\n".join(lines)
 
 
-def _send_daily_report_sync(leads: list[dict], high_priority_score: int, searches: int, skipped_duplicates: int) -> None:
+def _send_daily_report_sync(
+    leads: list[dict],
+    high_priority_score: int,
+    searches: int,
+    skipped_duplicates: int,
+    errors: list[str],
+) -> None:
     message = EmailMessage()
     message["From"] = settings.smtp_username
     message["To"] = settings.notification_email
     message["Subject"] = f"iWEB Marketing Agent - Reporte diario ({len(leads)} leads)"
-    message.set_content(_build_daily_report_text(leads, high_priority_score))
+    message.set_content(_build_daily_report_text(leads, high_priority_score, errors))
     message.add_alternative(
         _build_daily_report_html(
             leads,
             high_priority_score=high_priority_score,
             searches=searches,
             skipped_duplicates=skipped_duplicates,
+            errors=errors,
         ),
         subtype="html",
     )
     _send_message_sync(message)
 
 
-async def send_daily_lead_report(leads: list[dict], *, high_priority_score: int, searches: int, skipped_duplicates: int) -> None:
+async def send_daily_lead_report(
+    leads: list[dict],
+    *,
+    high_priority_score: int,
+    searches: int,
+    skipped_duplicates: int,
+    errors: list[str] | None = None,
+) -> None:
     await asyncio.to_thread(
         _send_daily_report_sync,
         leads,
         high_priority_score,
         searches,
         skipped_duplicates,
+        errors or [],
     )
