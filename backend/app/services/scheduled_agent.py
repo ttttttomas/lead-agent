@@ -50,7 +50,7 @@ async def run_daily_agent() -> dict:
 
     all_leads: list[dict] = []
     errors: list[str] = []
-    discovered = analyzed = qualified = skipped_duplicates = 0
+    discovered = analyzed = qualified = skipped_duplicates = skipped_chains = 0
 
     for outcome in outcomes:
         if outcome["error"]:
@@ -64,6 +64,7 @@ async def run_daily_agent() -> dict:
         analyzed += result.analyzed
         qualified += result.qualified
         skipped_duplicates += result.skipped_duplicates
+        skipped_chains += result.skipped_chains
 
         for lead in result.leads:
             if lead.analysis is None:
@@ -81,19 +82,32 @@ async def run_daily_agent() -> dict:
                 "facebook": lead.facebook,
                 "linkedin": lead.linkedin,
                 "contactable": lead.contactable,
+                "contact_score": lead.contact_score,
+                "opportunity_score": lead.opportunity_score,
+                "final_score": lead.final_score,
                 "source": lead.source,
                 "source_url": lead.source_url,
                 "analysis": lead.analysis,
             })
 
-    # Contactable leads first; unreachable leads remain visible in a secondary section.
-    all_leads.sort(key=lambda item: (bool(item.get("contactable")), item["analysis"].score), reverse=True)
+    # Final commercial score drives the report order. Contactability is used as
+    # an additional tie-breaker so actionable opportunities appear first.
+    all_leads.sort(
+        key=lambda item: (
+            bool(item.get("contactable")),
+            item.get("final_score") or 0,
+            item.get("contact_score") or 0,
+            item.get("opportunity_score") or 0,
+        ),
+        reverse=True,
+    )
 
     await send_daily_lead_report(
         all_leads,
         high_priority_score=settings.agent_high_priority_score,
         searches=len(combinations),
         skipped_duplicates=skipped_duplicates,
+        skipped_chains=skipped_chains,
         errors=errors,
     )
 
@@ -108,6 +122,7 @@ async def run_daily_agent() -> dict:
         "contactable": sum(1 for lead in all_leads if lead.get("contactable")),
         "without_contact": sum(1 for lead in all_leads if not lead.get("contactable")),
         "skipped_duplicates": skipped_duplicates,
+        "skipped_chains": skipped_chains,
         "report_leads": len(all_leads),
         "email_sent": True,
         "errors": errors,
