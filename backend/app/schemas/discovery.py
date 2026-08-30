@@ -35,6 +35,11 @@ class DiscoveredLead(BaseModel):
     facebook: str | None = None
     linkedin: str | None = None
     contactable: bool = False
+    contact_score: int = Field(default=0, ge=0, le=100)
+    opportunity_score: int | None = Field(default=None, ge=0, le=100)
+    final_score: int | None = Field(default=None, ge=0, le=100)
+    chain_detected: bool = False
+    chain_reason: str | None = None
     source: str
     source_url: str | None = None
     analysis: LeadAnalysis | None = None
@@ -49,6 +54,7 @@ class DiscoverySearchResponse(BaseModel):
     analyzed: int
     qualified: int
     skipped_duplicates: int
+    skipped_chains: int = 0
     leads: list[DiscoveredLead]
 
 
@@ -58,4 +64,5 @@ class AgentRunResponse(BaseModel):
     analyzed: int
     qualified: int
     skipped_duplicates: int
+    skipped_chains: int = 0
     results: list[DiscoverySearchResponse]
