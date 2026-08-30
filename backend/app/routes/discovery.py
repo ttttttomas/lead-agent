@@ -11,8 +11,9 @@ from app.schemas.discovery import (
     DiscoverySearchRequest,
     DiscoverySearchResponse,
 )
+from app.services.business_discovery import discover_businesses
 from app.services.contact_enrichment import enrich_contact_data
-from app.services.discovery import DiscoveryError, discover_businesses
+from app.services.discovery import DiscoveryError
 from app.services.email_notifier import send_lead_notification
 from app.services.kimi import analyze_lead_with_kimi, analyze_listing_with_kimi
 from app.services.lead_store import LeadStoreError, lead_exists, save_lead
@@ -75,13 +76,17 @@ async def _process_search(payload: DiscoverySearchRequest) -> DiscoverySearchRes
             skipped_duplicates += 1
             continue
 
-        # Enrich before analysis so web/contact channels found outside OSM are
-        # available to both Kimi and the final report.
+        # Overture can already provide websites/emails/phones/socials. The
+        # enrichment pass then inspects any website for additional direct
+        # channels such as WhatsApp, mailto links and contact pages.
         try:
             business = await enrich_contact_data(raw_business)
         except Exception:
             business = dict(raw_business)
-            business["contactable"] = any(business.get(k) for k in ("email", "phone"))
+            business["contactable"] = any(
+                business.get(k)
+                for k in ("email", "phone", "whatsapp", "instagram", "facebook", "linkedin", "website")
+            )
 
         result = DiscoveredLead(**business)
 
@@ -109,8 +114,6 @@ async def _process_search(payload: DiscoverySearchRequest) -> DiscoverySearchRes
         result.analysis = analysis
         analyzed += 1
 
-        # A lead is qualified for outreach only when it passes the score and
-        # has at least one public channel to contact it.
         if analysis.score >= payload.minimum_score and result.contactable:
             qualified += 1
 
