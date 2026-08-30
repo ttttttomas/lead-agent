@@ -11,6 +11,7 @@ from app.schemas.discovery import (
     DiscoverySearchRequest,
     DiscoverySearchResponse,
 )
+from app.services.contact_enrichment import enrich_contact_data
 from app.services.discovery import DiscoveryError, discover_businesses
 from app.services.email_notifier import send_lead_notification
 from app.services.kimi import analyze_lead_with_kimi, analyze_listing_with_kimi
@@ -34,7 +35,6 @@ async def _listing_analysis(business: dict):
 
 
 def _candidate_limit(requested_leads: int) -> int:
-    """Fetch enough candidates so duplicates do not consume the requested limit."""
     return min(max(requested_leads * 8, requested_leads + 20), 200)
 
 
@@ -56,28 +56,34 @@ async def _process_search(payload: DiscoverySearchRequest) -> DiscoverySearchRes
     qualified = 0
     skipped_duplicates = 0
 
-    for business in businesses:
-        # payload.limit now means NEW analyzed leads, not merely raw candidates.
+    for raw_business in businesses:
         if analyzed >= payload.limit:
             break
-
-        result = DiscoveredLead(**business)
 
         try:
             duplicate = await asyncio.to_thread(
                 lead_exists,
-                business["company"],
-                business["city"],
-                business.get("website"),
-                business.get("email"),
+                raw_business["company"],
+                raw_business["city"],
+                raw_business.get("website"),
+                raw_business.get("email"),
             )
-        except LeadStoreError as exc:
+        except LeadStoreError:
             duplicate = False
-            result.error = str(exc)
 
         if duplicate:
             skipped_duplicates += 1
             continue
+
+        # Enrich before analysis so web/contact channels found outside OSM are
+        # available to both Kimi and the final report.
+        try:
+            business = await enrich_contact_data(raw_business)
+        except Exception:
+            business = dict(raw_business)
+            business["contactable"] = any(business.get(k) for k in ("email", "phone"))
+
+        result = DiscoveredLead(**business)
 
         try:
             website_for_analysis = business.get("website")
@@ -96,13 +102,16 @@ async def _process_search(payload: DiscoverySearchRequest) -> DiscoverySearchRes
             else:
                 analysis = await _listing_analysis(business)
         except (httpx.HTTPError, ValueError, RuntimeError) as exc:
-            result.error = f"{result.error + ' | ' if result.error else ''}Analysis: {exc}"
+            result.error = f"Analysis: {exc}"
             results.append(result)
             continue
 
         result.analysis = analysis
         analyzed += 1
-        if analysis.score >= payload.minimum_score:
+
+        # A lead is qualified for outreach only when it passes the score and
+        # has at least one public channel to contact it.
+        if analysis.score >= payload.minimum_score and result.contactable:
             qualified += 1
 
         try:
@@ -121,7 +130,7 @@ async def _process_search(payload: DiscoverySearchRequest) -> DiscoverySearchRes
             )
             result.stored = True
         except LeadStoreError as exc:
-            result.error = f"{result.error + ' | ' if result.error else ''}{exc}"
+            result.error = str(exc)
 
         if payload.notify_each:
             try:
