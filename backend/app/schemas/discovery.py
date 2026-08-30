@@ -26,6 +26,7 @@ class DiscoveredLead(BaseModel):
     industry: str
     city: str
     country: str
+    address: str | None = None
     website: str | None = None
     email: str | None = None
     phone: str | None = None
