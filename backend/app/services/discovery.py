@@ -2,7 +2,7 @@ import re
 
 import httpx
 
-USER_AGENT = "LeadAgent/0.5 (business discovery; contact: local-development)"
+USER_AGENT = "LeadAgent/0.6 (business discovery; contact: local-development)"
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 OVERPASS_URLS = [
     "https://overpass.kumi.systems/api/interpreter",
@@ -11,28 +11,152 @@ OVERPASS_URLS = [
 ]
 
 CATEGORY_FILTERS = {
+    # Turismo y alojamiento
     "hoteles": [('tourism', 'hotel'), ('tourism', 'hostel'), ('tourism', 'guest_house')],
     "hotel": [('tourism', 'hotel')],
-    "restaurantes": [('amenity', 'restaurant'), ('amenity', 'fast_food')],
-    "restaurante": [('amenity', 'restaurant')],
+    "hostels": [('tourism', 'hostel')],
+    "apart hoteles": [('tourism', 'apartment')],
     "agencias de viajes": [('shop', 'travel_agency')],
     "agencia de viajes": [('shop', 'travel_agency')],
+    "campings": [('tourism', 'camp_site')],
+
+    # Gastronomía
+    "restaurantes": [('amenity', 'restaurant'), ('amenity', 'fast_food')],
+    "restaurante": [('amenity', 'restaurant')],
+    "cafeterias": [('amenity', 'cafe')],
+    "cafeterías": [('amenity', 'cafe')],
+    "bares": [('amenity', 'bar'), ('amenity', 'pub')],
+    "pizzerias": [('cuisine', 'pizza')],
+    "panaderias": [('shop', 'bakery')],
+    "panaderías": [('shop', 'bakery')],
+    "heladerias": [('amenity', 'ice_cream')],
+    "heladerías": [('amenity', 'ice_cream')],
+
+    # Inmobiliario / construcción / hogar
     "inmobiliarias": [('office', 'estate_agent')],
     "inmobiliaria": [('office', 'estate_agent')],
     "constructoras": [('craft', 'builder'), ('office', 'company')],
     "constructora": [('craft', 'builder')],
-    "peluquerias": [('shop', 'hairdresser')],
-    "peluquería": [('shop', 'hairdresser')],
-    "gimnasios": [('leisure', 'fitness_centre')],
-    "gimnasio": [('leisure', 'fitness_centre')],
+    "arquitectos": [('office', 'architect')],
+    "arquitectura": [('office', 'architect')],
+    "ingenierias": [('office', 'engineer')],
+    "ingenierías": [('office', 'engineer')],
+    "electricistas": [('craft', 'electrician')],
+    "plomeros": [('craft', 'plumber')],
+    "pintores": [('craft', 'painter')],
+    "carpinterias": [('craft', 'carpenter')],
+    "carpinterías": [('craft', 'carpenter')],
+    "mueblerias": [('shop', 'furniture')],
+    "mueblerías": [('shop', 'furniture')],
+    "ferreterias": [('shop', 'hardware')],
+    "ferreterías": [('shop', 'hardware')],
+    "corralones": [('shop', 'building_materials')],
+
+    # Salud
     "clinicas": [('amenity', 'clinic')],
     "clínicas": [('amenity', 'clinic')],
     "clinica": [('amenity', 'clinic')],
     "dentistas": [('amenity', 'dentist')],
-    "veterinarias": [('amenity', 'veterinary')],
+    "odontologos": [('amenity', 'dentist')],
+    "odontólogos": [('amenity', 'dentist')],
     "farmacias": [('amenity', 'pharmacy')],
-    "cafeterias": [('amenity', 'cafe')],
-    "cafeterías": [('amenity', 'cafe')],
+    "veterinarias": [('amenity', 'veterinary')],
+    "opticas": [('shop', 'optician')],
+    "ópticas": [('shop', 'optician')],
+    "fisioterapia": [('healthcare', 'physiotherapist')],
+    "kinesiologia": [('healthcare', 'physiotherapist')],
+    "kinesiología": [('healthcare', 'physiotherapist')],
+    "psicologos": [('healthcare', 'psychotherapist')],
+    "psicólogos": [('healthcare', 'psychotherapist')],
+    "laboratorios": [('healthcare', 'laboratory')],
+
+    # Belleza / bienestar
+    "peluquerias": [('shop', 'hairdresser')],
+    "peluquería": [('shop', 'hairdresser')],
+    "barberias": [('shop', 'hairdresser')],
+    "barberías": [('shop', 'hairdresser')],
+    "centros de estetica": [('shop', 'beauty')],
+    "centros de estética": [('shop', 'beauty')],
+    "spa": [('leisure', 'spa')],
+    "masajes": [('shop', 'massage')],
+    "tatuajes": [('shop', 'tattoo')],
+
+    # Deporte
+    "gimnasios": [('leisure', 'fitness_centre')],
+    "gimnasio": [('leisure', 'fitness_centre')],
+    "clubes deportivos": [('leisure', 'sports_centre')],
+    "canchas": [('leisure', 'pitch')],
+    "piletas": [('leisure', 'swimming_pool')],
+
+    # Automotor
+    "concesionarias": [('shop', 'car')],
+    "concesionaria": [('shop', 'car')],
+    "talleres mecanicos": [('shop', 'car_repair')],
+    "talleres mecánicos": [('shop', 'car_repair')],
+    "gomerias": [('shop', 'tyres')],
+    "gomerías": [('shop', 'tyres')],
+    "lavaderos de autos": [('amenity', 'car_wash')],
+    "alquiler de autos": [('amenity', 'car_rental')],
+    "estaciones de servicio": [('amenity', 'fuel')],
+
+    # Retail / comercios
+    "supermercados": [('shop', 'supermarket')],
+    "almacenes": [('shop', 'convenience')],
+    "tiendas de ropa": [('shop', 'clothes')],
+    "zapaterias": [('shop', 'shoes')],
+    "zapaterías": [('shop', 'shoes')],
+    "joyerias": [('shop', 'jewelry')],
+    "joyerías": [('shop', 'jewelry')],
+    "librerias": [('shop', 'books')],
+    "librerías": [('shop', 'books')],
+    "florerias": [('shop', 'florist')],
+    "florerías": [('shop', 'florist')],
+    "jugueterias": [('shop', 'toys')],
+    "jugueterías": [('shop', 'toys')],
+    "electronica": [('shop', 'electronics')],
+    "electrónica": [('shop', 'electronics')],
+    "celulares": [('shop', 'mobile_phone')],
+    "pet shops": [('shop', 'pet')],
+
+    # Educación
+    "colegios": [('amenity', 'school')],
+    "escuelas": [('amenity', 'school')],
+    "jardines": [('amenity', 'kindergarten')],
+    "universidades": [('amenity', 'university')],
+    "institutos": [('amenity', 'college')],
+    "academias de idiomas": [('amenity', 'language_school')],
+    "autoescuelas": [('amenity', 'driving_school')],
+
+    # Servicios profesionales
+    "estudios contables": [('office', 'accountant')],
+    "contadores": [('office', 'accountant')],
+    "abogados": [('office', 'lawyer')],
+    "estudios juridicos": [('office', 'lawyer')],
+    "estudios jurídicos": [('office', 'lawyer')],
+    "consultoras": [('office', 'consulting')],
+    "agencias de marketing": [('office', 'advertising_agency')],
+    "marketing": [('office', 'advertising_agency')],
+    "seguros": [('office', 'insurance')],
+    "financieras": [('office', 'financial')],
+    "coworkings": [('office', 'coworking')],
+    "notarias": [('office', 'notary')],
+    "notarías": [('office', 'notary')],
+
+    # Tecnología / impresión / servicios digitales
+    "informatica": [('shop', 'computer')],
+    "informática": [('shop', 'computer')],
+    "servicio tecnico pc": [('shop', 'computer')],
+    "imprentas": [('shop', 'copyshop')],
+    "fotografos": [('craft', 'photographer')],
+    "fotógrafos": [('craft', 'photographer')],
+
+    # Logística / eventos
+    "couriers": [('office', 'logistics')],
+    "logistica": [('office', 'logistics')],
+    "logística": [('office', 'logistics')],
+    "salones de eventos": [('amenity', 'events_venue')],
+    "organizadores de eventos": [('office', 'event_management')],
+    "funerarias": [('shop', 'funeral_directors')],
 }
 
 
@@ -105,12 +229,7 @@ def _build_overpass_query(filters: list[tuple[str, str]], bbox: tuple[float, flo
 
 
 async def _query_overpass(query: str) -> dict:
-    """Try each public provider once and fail over quickly.
-
-    Public Overpass instances are best-effort services. Retrying the same
-    overloaded instance twice can make a scheduled run take several minutes,
-    so the agent immediately moves to the next provider instead.
-    """
+    """Try each public provider once and fail over quickly."""
     headers = {"User-Agent": USER_AGENT}
     errors: list[str] = []
     timeout = httpx.Timeout(20.0, connect=6.0, read=20.0, write=8.0, pool=6.0)
