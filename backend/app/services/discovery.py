@@ -1,14 +1,13 @@
-import asyncio
 import re
 
 import httpx
 
-USER_AGENT = "LeadAgent/0.4 (business discovery; contact: local-development)"
+USER_AGENT = "LeadAgent/0.5 (business discovery; contact: local-development)"
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 OVERPASS_URLS = [
-    "https://overpass-api.de/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
-    "https://overpass.nchc.org.tw/api/interpreter",
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.private.coffee/api/interpreter",
 ]
 
 CATEGORY_FILTERS = {
@@ -80,7 +79,8 @@ async def _geocode_bbox(city: str, country: str) -> tuple[float, float, float, f
     }
     headers = {"User-Agent": USER_AGENT, "Accept-Language": "es,en;q=0.8"}
 
-    async with httpx.AsyncClient(timeout=20.0, headers=headers) as client:
+    timeout = httpx.Timeout(12.0, connect=6.0)
+    async with httpx.AsyncClient(timeout=timeout, headers=headers) as client:
         response = await client.get(NOMINATIM_URL, params=params)
         response.raise_for_status()
         data = response.json()
@@ -101,34 +101,34 @@ def _build_overpass_query(filters: list[tuple[str, str]], bbox: tuple[float, flo
                 f'{element_type}["{key}"="{value}"]["name"]({south},{west},{north},{east});'
             )
 
-    return "[out:json][timeout:25];(" + "".join(parts) + ");out center tags;"
+    return "[out:json][timeout:15];(" + "".join(parts) + ");out center tags;"
 
 
 async def _query_overpass(query: str) -> dict:
+    """Try each public provider once and fail over quickly.
+
+    Public Overpass instances are best-effort services. Retrying the same
+    overloaded instance twice can make a scheduled run take several minutes,
+    so the agent immediately moves to the next provider instead.
+    """
     headers = {"User-Agent": USER_AGENT}
     errors: list[str] = []
+    timeout = httpx.Timeout(20.0, connect=6.0, read=20.0, write=8.0, pool=6.0)
 
-    async with httpx.AsyncClient(timeout=35.0, headers=headers) as client:
+    async with httpx.AsyncClient(timeout=timeout, headers=headers) as client:
         for url in OVERPASS_URLS:
-            for attempt in range(2):
-                try:
-                    response = await client.post(url, data={"data": query})
-                    if response.status_code in {429, 502, 503, 504}:
-                        raise httpx.HTTPStatusError(
-                            f"Overpass temporary error {response.status_code}",
-                            request=response.request,
-                            response=response,
-                        )
-                    response.raise_for_status()
-                    return response.json()
-                except (httpx.TimeoutException, httpx.HTTPStatusError, httpx.RequestError, ValueError) as exc:
-                    errors.append(f"{url} attempt {attempt + 1}: {exc}")
-                    if attempt == 0:
-                        await asyncio.sleep(1.5)
+            try:
+                response = await client.post(url, data={"data": query})
+                if response.status_code in {429, 502, 503, 504}:
+                    errors.append(f"{url}: HTTP {response.status_code}")
+                    continue
+                response.raise_for_status()
+                return response.json()
+            except (httpx.TimeoutException, httpx.HTTPStatusError, httpx.RequestError, ValueError) as exc:
+                errors.append(f"{url}: {exc.__class__.__name__}: {exc}")
 
     raise DiscoveryError(
-        "All Overpass providers failed temporarily. "
-        + " | ".join(errors[-6:])
+        "All Overpass providers failed temporarily. " + " | ".join(errors)
     )
 
 
